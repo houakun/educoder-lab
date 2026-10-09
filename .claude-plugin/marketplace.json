@@ -1,0 +1,22 @@
+{
+  "name": "educoder-lab",
+  "owner": {
+    "name": "houakun",
+    "url": "https://github.com/houakun"
+  },
+  "metadata": {
+    "description": "Agent skills for 头歌 (EduCoder) classroom lab automation",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "educoder-lab",
+      "description": "Finish 头歌 (EduCoder) labs end to end through the platform JSON API: list courses and homeworks, read a challenge statement and code, auto-submit multiple-choice challenges, save and grade code challenges, retry grading, and walk every challenge of a homework.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./educoder-lab"
+      ]
+    }
+  ]
+}
