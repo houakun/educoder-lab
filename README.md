@@ -88,7 +88,7 @@ python educoder.py evaluate --game <gid> --homework-id <hw> --wait
 ### Commands
 
 | Command | Purpose |
-|---|---|
+| --- | --- |
 | `login` | Authenticate and cache the session |
 | `status` | Check the cached session |
 | `courses` | List your courses |
@@ -100,10 +100,47 @@ python educoder.py evaluate --game <gid> --homework-id <hw> --wait
 | `choose --game <gid> --subject-id <sid>` | Submit a multiple-choice challenge |
 | `auto --course <cid> --homework <hw> [--next]` | Survey a homework |
 | `solve --course <cid> --homework <hw>` | Walk a homework, auto-submitting choices |
+| `stats [--sessions]` | How often this skill was used (local counters, or session logs) |
 
 Useful flags: `--dry-run` (show the exact upload plan), `--wait` (poll for the verdict),
 `--no-evaluate` (save only), `--force` (upload even with a platform blank left),
 `--json --fields game,test_sets` (tiny status output), `--max-output N`, `--refresh`.
+
+### Usage stats
+
+Every run is counted locally in `~/.educoder/usage.json`, and `stats` reports it:
+
+```bash
+python educoder.py stats                # runs, per-command totals, recent days
+python educoder.py stats --sessions     # also count real usage in agent session logs
+```
+
+```text
+local counters: ~/.educoder/usage.json
+  total runs: 5   failures: 0
+  first: 2026-10-12T18:45:05   last: 2026-10-12T18:45:10
+    stats      3
+    auto       1
+    task       1
+  recent days: 2026-10-12:5
+agent sessions: ~/.pi/agent/sessions
+  skill loads: 1   tool calls: 174   /skill: commands: 0
+  sessions using it: 3/47 scanned
+  first: 2026-09-24T10:54:11.250Z   last: 2026-10-12T10:45:23.559Z
+note: counters are local to this machine; nothing is uploaded.
+```
+
+- **Nothing is uploaded.** No endpoint is contacted, and only the command name, a
+timestamp and the outcome are stored — never an account, a path or an argument.
+Set `EDUCODER_NO_USAGE=1` to switch counting off.
+- `--sessions` scans `~/.pi/agent/sessions/**/*.jsonl` (override with
+`--sessions-dir`) and counts three real-usage signals: an injected
+`<skill name="educoder-lab">` block (the skill was loaded), a tool call touching
+`educoder.py` or `SKILL.md`, and an explicit `/skill:educoder-lab` command. Mentions
+inside system prompts are ignored on purpose: an installed skill is advertised in
+every session, so counting those would measure installation rather than use.
+- A cross-user total cannot come from the client without telemetry, which this skill
+deliberately does not do. Use the repository's traffic and stars for rough popularity.
 
 ## Requirements
 

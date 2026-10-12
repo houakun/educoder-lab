@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.10+ and network access to data.educoder.net, plus an EduCoder account. No third-party packages and no browser.
 metadata:
   author: houakun
-  version: "1.0.0"
+  version: "1.1.0"
   repository: https://github.com/houakun/educoder-lab
   language: python
 ---
@@ -30,6 +30,7 @@ python educoder.py login --login <account>      # prompts for password, caches s
 python educoder.py status                       # confirm the cached session still works
 python educoder.py courses                      # find the course identifier
 python educoder.py homeworks --course <cid>     # TODO rows are unfinished; gid= is the entry challenge
+python educoder.py stats                        # how often this skill was used (local only)
 ```
 
 ## The two challenge kinds
@@ -188,6 +189,33 @@ Defaults are terse; raise them only when needed.
   `line 2 col 7: expected 'line2 RIGHT' got 'line2 WRONG'`, plus missing or extra
   lines — usually enough to fix the code without re-reading anything.
 
+## Usage counters
+
+The CLI counts its own use in `~/.educoder/usage.json`, and `stats` reports it.
+
+```bash
+python educoder.py stats                # runs, per-command totals, recent days
+python educoder.py stats --sessions     # also scan agent session logs for real usage
+python educoder.py stats --json         # raw counters
+```
+
+- **Counters are local only.** Nothing is uploaded anywhere: no endpoint is
+  contacted, and only the command name, a timestamp and the outcome are stored —
+  never an account, a path or an argument. `EDUCODER_NO_USAGE=1` switches
+  counting off.
+- `--sessions` reads local session logs (`~/.pi/agent/sessions/**/*.jsonl`;
+  override with `--sessions-dir`) and counts three real-usage signals: an injected
+  `<skill name="educoder-lab">` block (a load), a tool call touching
+  `educoder.py` or `SKILL.md`, and an explicit `/skill:educoder-lab` command.
+  Skill names appearing inside system prompts are ignored on purpose — an
+  installed skill is advertised in every session, so counting those would measure
+  installation rather than use.
+- A "how many people used this" total cannot come from the client: it would need
+  telemetry to a server, which this skill deliberately does not do. Check the
+  repository's traffic and stars for rough popularity instead.
+- A corrupt counter file is ignored rather than fatal, and the next run rewrites
+  it.
+
 ## Safety
 
 - `submit` is a **remote write** and `evaluate`/`choose` **start grading**. Both
@@ -199,6 +227,8 @@ Defaults are terse; raise them only when needed.
   file, the cookies, or the `zzud` value into the conversation.
 - This runs against the user's own account and courses. Do not point it at
   someone else's account.
+- Usage counters stay on this machine (`~/.educoder/usage.json`); nothing is
+  uploaded. Set `EDUCODER_NO_USAGE=1` to turn counting off.
 
 ## References
 

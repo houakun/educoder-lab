@@ -14,6 +14,7 @@ Commands:
     submit     save code remotely (one file, or --dir) and grade it once
     evaluate   re-run grading for the current commit, without re-uploading
     auto       walk unfinished challenges of one homework and report
+    stats      show how often this skill was used (local counters only)
 """
 from __future__ import annotations
 
@@ -38,8 +39,18 @@ SK = "2e3da06ae26ba9f76a5d8d355746f2fe"
 CONFIG_DIR = Path(os.environ.get("EDUCODER_HOME") or (Path.home() / ".educoder"))
 SESSION_FILE = CONFIG_DIR / "session.json"
 CACHE_DIR = CONFIG_DIR / "cache"
+USAGE_FILE = CONFIG_DIR / "usage.json"
 CACHE_TTL = 600.0          # seconds; bypass with --refresh
 MAX_OUTPUT_DEFAULT = 2000  # chars, hard cap on anything printed into the transcript
+
+SCRIPT_VERSION = "1.1.0"
+SKILL_NAME = "educoder-lab"
+
+# Local usage counters. They never leave this machine: no endpoint is contacted,
+# and only the command name, a timestamp and the outcome are stored.
+USAGE_DAYS_KEPT = 30
+USAGE_DISABLED_ENV = "EDUCODER_NO_USAGE"
+DEFAULT_SESSIONS_DIR = Path.home() / ".pi" / "agent" / "sessions"
 
 # Transient HTTP failures worth retrying (429 gets a longer backoff).
 RETRIES = 3
@@ -67,7 +78,10 @@ def gen_signature(method: str) -> tuple[int, str]:
     b64 = base64.b64encode(params.encode()).decode()
     # The platform mandates md5 over a base64 payload; this is a wire-protocol
     # signature, not a security primitive, so usedforsecurity=False is correct.
-    return ts, hashlib.md5(b64.encode(), usedforsecurity=False).hexdigest()
+    # The algorithm is not a choice: the server rejects any other digest with
+    # status=-102, so this is a deliberate, reviewed exception rather than a fix.
+    # pi-lens-ignore: python-weak-hash
+    return ts, hashlib.md5(b64.encode(), usedforsecurity=False).hexdigest()  # noqa: S324
 
 
 class ApiError(RuntimeError):
@@ -417,6 +431,203 @@ def cache_write(key: str, data) -> None:
         _cache_path(key).write_text(
             json.dumps({"fetched_at": time.time(), "data": data}, ensure_ascii=False),
             encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# local usage counters (stats)
+# --------------------------------------------------------------------------
+def _usage_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _as_int(value) -> int:
+    """Coerce a stored counter to int; a corrupt value reads as 0."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _read_usage_file() -> dict:
+    """Load the local counter file; missing or corrupt data reads as empty."""
+    try:
+        data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def record_usage(command: str, *, ok: bool = True) -> None:
+    """Count one CLI run in `~/.educoder/usage.json`.
+
+    Local by design: nothing is uploaded anywhere, and no account, path or
+    argument is stored -- just the command name, a timestamp and the outcome.
+    Set EDUCODER_NO_USAGE=1 to switch counting off. Any failure in here is
+    swallowed, because statistics must never break the actual work.
+    """
+    if os.environ.get(USAGE_DISABLED_ENV):
+        return
+    try:
+        data = _read_usage_file()
+        now = _usage_now()
+        data["total_runs"] = _as_int(data.get("total_runs")) + 1
+        commands = data.get("commands")
+        commands = commands if isinstance(commands, dict) else {}
+        commands[command] = _as_int(commands.get(command)) + 1
+        data["commands"] = commands
+        if not ok:
+            data["failures"] = _as_int(data.get("failures")) + 1
+        data["first_used_at"] = data.get("first_used_at") or now
+        data["last_used_at"] = now
+        by_day = data.get("by_day")
+        by_day = by_day if isinstance(by_day, dict) else {}
+        by_day[now[:10]] = _as_int(by_day.get(now[:10])) + 1
+        for stale in sorted(by_day)[:-USAGE_DAYS_KEPT]:
+            by_day.pop(stale, None)
+        data["by_day"] = by_day
+        data["script_version"] = SCRIPT_VERSION
+        data["python"] = f"{sys.version_info.major}.{sys.version_info.minor}"
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = USAGE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        tmp.replace(USAGE_FILE)
+    except Exception as exc:
+        # A statistics write must never take the real work down with it; it is
+        # only ever surfaced when explicitly asked for.
+        if os.environ.get("EDUCODER_DEBUG"):
+            print(f"usage counter skipped: {exc}", file=sys.stderr)
+
+
+def scan_sessions(root: Path) -> dict:
+    """Count agent-side usage of this skill from local session logs.
+
+    Three signals, all read from `~/.pi/agent/sessions/**/*.jsonl`:
+    an injected `<skill name="..." >` block (the skill was loaded), a tool call
+    touching educoder.py or SKILL.md, and an explicit `/skill:...` command.
+    Read-only: nothing is sent anywhere.
+
+    Mentions inside a system prompt are deliberately ignored -- an installed
+    skill is advertised in every session, so counting those would measure
+    installation rather than use.
+    """
+    stats = {
+        "sessions_dir": str(root),
+        "found": root.is_dir(),
+        "files_scanned": 0,
+        "sessions_touched": 0,
+        "skill_loads": 0,
+        "tool_calls": 0,
+        "slash_commands": 0,
+        "first_seen": "",
+        "last_seen": "",
+    }
+    if not stats["found"]:
+        return stats
+    for path in sorted(root.rglob("*.jsonl")):
+        stats["files_scanned"] += 1
+        touched = False
+        try:
+            handle = path.open("r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict) or event.get("type") != "message":
+                    continue
+                message = event.get("message") or {}
+                role = message.get("role")
+                content = message.get("content")
+                if isinstance(content, str):
+                    content = [{"type": "text", "text": content}]
+                if not isinstance(content, list):
+                    continue
+                line_hit = False
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    kind = part.get("type")
+                    if role == "user" and kind == "text":
+                        text = part.get("text") or ""
+                        if f'<skill name="{SKILL_NAME}"' in text:
+                            stats["skill_loads"] += 1
+                            line_hit = True
+                        if re.search(rf"(^|\n)\s*/skill:{SKILL_NAME}\b", text):
+                            stats["slash_commands"] += 1
+                            line_hit = True
+                    elif kind in ("toolCall", "tool_call"):
+                        raw_args = part.get("arguments")
+                        blob = (raw_args if isinstance(raw_args, str)
+                                else json.dumps(raw_args or {}, ensure_ascii=False))
+                        if "educoder.py" in blob or f"{SKILL_NAME}/SKILL.md" in blob:
+                            stats["tool_calls"] += 1
+                            line_hit = True
+                if line_hit:
+                    touched = True
+                    stamp = str(event.get("timestamp") or "")
+                    if stamp:
+                        if not stats["first_seen"] or stamp < stats["first_seen"]:
+                            stats["first_seen"] = stamp
+                        if stamp > stats["last_seen"]:
+                            stats["last_seen"] = stamp
+        if touched:
+            stats["sessions_touched"] += 1
+    return stats
+
+
+def cmd_stats(args):
+    """Report how often this skill was used, from local data only."""
+    local = _read_usage_file()
+    report = {"usage_file": str(USAGE_FILE), "local": local}
+    if getattr(args, "sessions", False):
+        # The directory is caller-supplied on purpose: scanning it is the whole
+        # point of the flag. Only *.jsonl files below it are read -- nothing is
+        # written, and read paths are absolutised before use.
+        raw_root = getattr(args, "sessions_dir", None)
+        root = Path(raw_root).expanduser() if raw_root else DEFAULT_SESSIONS_DIR
+        report["agent_sessions"] = scan_sessions(root.resolve())
+    if getattr(args, "json", False):
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+
+    print(f"local counters: {USAGE_FILE}")
+    if not local:
+        print("  (none yet - counters are written after the first command)")
+    else:
+        print(f"  total runs: {local.get('total_runs')}   "
+              f"failures: {local.get('failures') or 0}")
+        print(f"  first: {local.get('first_used_at')}   "
+              f"last: {local.get('last_used_at')}")
+        for name, count in sorted((local.get("commands") or {}).items(),
+                                  key=lambda kv: (-kv[1], kv[0])):
+            print(f"    {name:<10} {count}")
+        by_day = local.get("by_day") or {}
+        if by_day:
+            recent = ", ".join(f"{d}:{by_day[d]}" for d in sorted(by_day)[-7:])
+            print(f"  recent days: {recent}")
+    agent = report.get("agent_sessions")
+    if agent is not None:
+        print(f"agent sessions: {agent['sessions_dir']}")
+        if not agent["found"]:
+            print("  (directory not found - pass --sessions-dir)")
+        else:
+            print(f"  skill loads: {agent['skill_loads']}   "
+                  f"tool calls: {agent['tool_calls']}   "
+                  f"/skill: commands: {agent['slash_commands']}")
+            print(f"  sessions using it: {agent['sessions_touched']}"
+                  f"/{agent['files_scanned']} scanned")
+            if agent["first_seen"]:
+                print(f"  first: {agent['first_seen']}   "
+                      f"last: {agent['last_seen']}")
+    print("note: counters are local to this machine; nothing is uploaded.")
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -1097,7 +1308,7 @@ def cmd_solve(args):
     for gid, raw in walk_challenges(api, entry, hw_id):
         game = raw.get("game") or {}
         ch = raw.get("challenge") or {}
-        title = ch.get("subject") or game.get("id")
+        title = str(ch.get("subject") or game.get("id") or "(untitled)")
         total += 1
         if game.get("status") == 2:
             passed += 1
@@ -1233,6 +1444,14 @@ def build_parser():
     s.add_argument("--subject-id")
     s.set_defaults(fn=cmd_solve)
 
+    s = sub.add_parser("stats", parents=[common],
+                       help="show how often this skill was used (local counters)")
+    s.add_argument("--sessions", action="store_true",
+                   help="also scan local agent session logs for skill usage")
+    s.add_argument("--sessions-dir",
+                   help=f"session log root (default {DEFAULT_SESSIONS_DIR})")
+    s.set_defaults(fn=cmd_stats)
+
     return p
 
 
@@ -1249,18 +1468,20 @@ def main():
         args.refresh = False
     if not hasattr(args, "max_output"):
         args.max_output = MAX_OUTPUT_DEFAULT
+    status = 0
     try:
-        rc = args.fn(args)
+        status = args.fn(args) or 0
+    except KeyboardInterrupt:
+        status = 130
     except SessionExpired as exc:
         print(f"error: {exc}\nsession expired — run: "
               f"python educoder.py login --login <account>", file=sys.stderr)
-        return 1
+        status = 1
     except ApiError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 1
-    except KeyboardInterrupt:
-        return 130
-    return rc or 0
+        status = 1
+    record_usage(getattr(args, "cmd", None) or "unknown", ok=(status == 0))
+    return status
 
 
 if __name__ == "__main__":

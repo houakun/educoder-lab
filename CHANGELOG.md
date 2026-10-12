@@ -4,6 +4,31 @@ All notable changes to this skill are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-10-12
+
+### Added
+
+- **Usage counters.** Every CLI run is counted in `~/.educoder/usage.json` — total
+  runs, per-command totals, failures, first/last use, and a 30-day daily breakdown —
+  and the new `stats` command reports them. Counting is local only: nothing is
+  uploaded, and no account, path or argument is stored. `EDUCODER_NO_USAGE=1`
+  switches it off.
+- `stats --sessions` counts real agent-side usage from local session logs
+  (`~/.pi/agent/sessions/**/*.jsonl`, override with `--sessions-dir`): injected
+  `<skill name="educoder-lab">` blocks (loads), tool calls touching `educoder.py`
+  or `SKILL.md`, and explicit `/skill:educoder-lab` commands. Mentions inside
+  system prompts are deliberately ignored, so the number measures use rather than
+  installation.
+- `stats --json` prints the raw counters, and `SCRIPT_VERSION` / `SKILL_NAME`
+  constants keep the counter file in step with the published version.
+
+### Fixed
+
+- A corrupt or truncated `~/.educoder/usage.json` is ignored instead of fatal, and
+  the next run rewrites it (`_read_usage_file`, `_as_int`). A statistics write can
+  never take the real work down: failures are swallowed (visible only under
+  `EDUCODER_DEBUG=1`).
+
 ## [1.0.0] — 2026-10-09
 
 First public release. Published under the [Agent Skills](https://agentskills.io/specification)
