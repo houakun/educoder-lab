@@ -43,7 +43,7 @@ USAGE_FILE = CONFIG_DIR / "usage.json"
 CACHE_TTL = 600.0          # seconds; bypass with --refresh
 MAX_OUTPUT_DEFAULT = 2000  # chars, hard cap on anything printed into the transcript
 
-SCRIPT_VERSION = "1.1.0"
+SCRIPT_VERSION = "1.2.0"
 SKILL_NAME = "educoder-lab"
 
 # Local usage counters. They never leave this machine: no endpoint is contacted,
@@ -820,6 +820,60 @@ def cmd_code(args):
         print(f"wrote {len(text)} -> {dest}  (remote: {remote})")
 
 
+def load_answers(path: str) -> list[str]:
+    """Read answers from a JSON list, a {position: answer} map, or one per line.
+
+    A file beats 100+ positional arguments: it survives shell quoting, can be
+    reviewed before submission, and can be replayed after a page-side redo.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        # Windows editors still save GBK by default; an answer file is data, so
+        # fall back instead of crashing on it.
+        try:
+            text = Path(path).read_text(encoding="gbk")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ApiError(f"--answer-file 无法解码（需 UTF-8 或 GBK）：{exc}") from None
+    except OSError as exc:
+        raise ApiError(f"无法读取 --answer-file：{exc}") from None
+    stripped = text.strip()
+    if not stripped:
+        raise ApiError(f"--answer-file 为空：{path}")
+    if stripped[0] in "[{":
+        try:
+            data = json.loads(stripped)
+        except ValueError as exc:
+            raise ApiError(f"--answer-file 不是合法 JSON：{exc}") from None
+        if isinstance(data, list):
+            return [str(item).strip() for item in data]
+        if isinstance(data, dict):
+            try:
+                ordered = sorted(data.items(), key=lambda kv: int(kv[0]))
+            except (TypeError, ValueError):
+                raise ApiError("--answer-file 的键必须是题号（1、2、3…）") from None
+            return [str(value).strip() for _, value in ordered]
+        raise ApiError("--answer-file JSON 必须是数组或 {题号: 答案} 对象")
+    lines = [line.strip() for line in text.splitlines()]
+    return [line for line in lines if line and not line.startswith("#")]
+
+
+def summarize_wrong(tests: list[dict]) -> list[tuple]:
+    """Return (position, mine, standard) for every non-passing answer.
+
+    `result` is None while a question is ungraded, so only an explicitly falsy
+    result counts as wrong.
+    """
+    wrong = []
+    for t in tests:
+        result = t.get("result")
+        if result is None or result:
+            continue
+        wrong.append((t.get("position"), t.get("actual_output"),
+                      t.get("standard_answer")))
+    return wrong
+
+
 def cmd_choose(args):
     api = Api()
     api.ensure()
@@ -833,15 +887,39 @@ def cmd_choose(args):
     raw = _task_view(api, gid, args.homework_id)
     ch = raw.get("challenge") or {}
     tests = (raw.get("choose_test_cases") or {}).get("test_sets") or []
-    answers = args.answer or [t.get("standard_answer") for t in tests]
+
+    if getattr(args, "answer_file", None):
+        answers = load_answers(args.answer_file)
+    elif args.answer:
+        answers = list(args.answer)
+    else:
+        answers = [t.get("standard_answer") for t in tests]
     if not answers or any(a is None for a in answers):
-        raise ApiError("该关卡没有可提交的选择题答案")
+        raise ApiError("该关卡没有可提交的选择题答案（平台未下发 standard_answer）；"
+                       "用 --answer-file 提供答案，客观题流程见 references/quiz.md")
+
+    expected = len(tests)
+    if expected and len(answers) != expected:
+        raise ApiError(f"答案数量 {len(answers)} 与题目数量 {expected} 不一致，拒绝提交")
+
+    if getattr(args, "dry_run", False):
+        preview = ", ".join(f"{i + 1}:{a}" for i, a in enumerate(answers[:8]))
+        more = f" … (+{len(answers) - 8})" if len(answers) > 8 else ""
+        print(f"DRY-RUN game={gid} challenge={ch.get('id')} "
+              f"questions={expected} answers={len(answers)}")
+        print(f"  {preview}{more}")
+        return 0
+
     resp = api.post(
         f"/tasks/{gid}/choose_build.json?zzud={api.zzud}",
         {"answer": answers, "challenge_id": ch.get("id"),
-         "subject_id": args.subject_id, "question_id": None,
+         "subject_id": args.subject_id or "", "question_id": None,
          "competition_entry_id": None, "smart_plan_page_item_bank_id": None},
     )
+    if resp.get("status") not in (None, 0) and resp.get("message"):
+        raise ApiError(f"提交被拒绝：{resp.get('message')}"
+                       "（这类校验只有页面提交能通过，见 references/quiz.md）")
+
     total = resp.get("challenge_chooses_count")
     correct = resp.get("choose_correct_num")
     print(f"answers={json.dumps(answers, ensure_ascii=False)} correct={correct}/{total} "
@@ -849,6 +927,10 @@ def cmd_choose(args):
     for t in resp.get("test_sets") or []:
         print(f"  pos={t.get('position')} result={t.get('result')} "
               f"actual={t.get('actual_output')!r} std={t.get('standard_answer')!r}")
+    wrong = summarize_wrong(resp.get("test_sets") or [])
+    if wrong:
+        detail = "; ".join(f"pos={p} mine={m!r} std={s!r}" for p, m, s in wrong)
+        print(f"wrong={len(wrong)}/{total}: {detail}")
     return 0 if total and correct == total else 1
 
 
@@ -1377,13 +1459,18 @@ def build_parser():
     s.set_defaults(fn=cmd_task)
 
     s = sub.add_parser("choose", parents=[common],
-                       help="submit choice answers read from the platform")
+                       help="submit choice answers (platform's own, or --answer-file)")
     s.add_argument("--game")
     s.add_argument("--course")
     s.add_argument("--homework")
     s.add_argument("--homework-id", type=int)
     s.add_argument("--subject-id")
     s.add_argument("--answer", nargs="*")
+    s.add_argument("--answer-file",
+                   help="answers from a JSON list, a {position: answer} map, "
+                        "or one per line (# comments allowed)")
+    s.add_argument("--dry-run", action="store_true",
+                   help="validate answer count/format without submitting")
     s.set_defaults(fn=cmd_choose)
 
     s = sub.add_parser("code", parents=[common], help="read remote answer file(s)")

@@ -4,6 +4,48 @@ All notable changes to this skill are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-10-25
+
+Driven by a real 165-question run (two networking pools) that exposed the gaps
+below.
+
+### Added
+
+- `choose --answer-file <path>` — answers from a JSON list, a `{position: answer}`
+  map, or one per line (`#` comments allowed). A file survives shell quoting and
+  can be replayed; 100+ positional arguments cannot. UTF-8 with a GBK fallback,
+  because Windows editors still write GBK.
+- `choose --dry-run` — prints the pool size and a preview, validating the answer
+  count against the platform without submitting.
+- `choose` now refuses a count mismatch (`答案数量 41 与题目数量 42 不一致`) — a
+  43-element array for a 42-question pool is what produced the misleading
+  `题目有更新，请刷新后再次作答！`.
+- `choose` prints a one-line wrong-answer digest
+  (`wrong=1/42: pos=4 mine='错误' std='正确'`) after a submission.
+- `references/quiz.md` — the browser path for pools the API cannot serve: cookie
+  injection, question extraction, page submission, wrong-answer detection from the
+  result panel, figure/table downloads, and a fetch/XHR hook that captures the
+  page's real payload instead of guessing it.
+
+### Fixed
+
+- `choose` sends `subject_id: ""` (the page's value) instead of `null`.
+- A non-UTF-8 answer file now falls back to GBK and reports a clear error, instead
+  of dying with a `UnicodeDecodeError` traceback.
+- An API rejection is mapped to `提交被拒绝：…` with a pointer to
+  `references/quiz.md` rather than printing an empty `correct=None/None` line.
+
+### Documented
+
+- True/false questions are answered with the strings **`"true"` / `"false"`**;
+  `A`, `B` and `正确` are all marked wrong (verified on a live pool).
+- A pool is finished only at a perfect score: one miss in 42 gives
+  `final_score: 400, status: 0`. A later correct submission restores `status: 2`.
+- Re-submitting is not a hard lock: check the answer count before believing
+  `题目有更新`.
+- `courses`/`homeworks` can omit a course until `--refresh` (a whole course was
+  missed on the first sweep).
+
 ## [1.1.0] — 2026-10-12
 
 ### Added

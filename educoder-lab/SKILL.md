@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.10+ and network access to data.educoder.net, plus an EduCoder account. No third-party packages and no browser.
 metadata:
   author: houakun
-  version: "1.1.0"
+  version: "1.2.0"
   repository: https://github.com/houakun/educoder-lab
   language: python
 ---
@@ -35,12 +35,25 @@ python educoder.py stats                        # how often this skill was used 
 
 ## The two challenge kinds
 
-**Multiple choice** — the platform returns its own answers, so there is nothing
+**Multiple choice** — when the platform carries the answers, there is nothing
 to solve:
 
 ```bash
 python educoder.py task --game <gid> --homework-id <hw>     # prints answers=[...]
 python educoder.py choose --game <gid> --subject-id <sid>   # submits them
+```
+
+Some pools carry **no answers and no question text** in the API (`answer=None`
+on every row, `task_pass` is just a title). Then the questions have to be read
+from the rendered page with a browser, answered, and submitted **from the page**
+— see `references/quiz.md` for the whole flow, including the result panel and
+the figure/table handling. `choose` takes a prepared answer file:
+
+```bash
+python educoder.py choose --game <gid> --homework-id <hw> \
+    --answer-file answers.json --dry-run     # checks count, submits nothing
+python educoder.py choose --game <gid> --homework-id <hw> \
+    --answer-file answers.json
 ```
 
 **Code** — read, edit locally, submit:
@@ -166,6 +179,27 @@ python educoder.py auto --course 125505 --homework 4197533 --next
 - **`game_build.json` does not return the verdict.** It only starts the run
   (`msg: 评测完成`, `res.code: 0`); re-read `/tasks/{gid}.json` for
   `last_compile_output` and `test_sets`.
+- **Choice pools may carry no questions and no answers.** When every
+  `standard_answer` is `null` and `task_pass` is just a title, the API cannot
+  solve the challenge — read the rendered page with a browser and submit from
+  there (`references/quiz.md`). Endpoint guessing does not help: the obvious
+  question routes answer 302.
+- **True/false questions take the strings `"true"` / `"false"`.** Letter
+  answers do not work for them (`A` and `B` are both marked `错误`), and neither
+  does `正确`. On the page they are the first/second label (`正确` / `错误`); in
+  the API payload the value is the lowercase string. `references/quiz.md` shows
+  how to capture the page's real payload instead of guessing.
+- **`status == 2` needs a perfect choice submission.** One wrong answer in a
+  42-question pool gives `final_score: 400` with `status: 0`; the challenge is
+  not done until every question is right.
+- **A re-submission can be rejected** with
+  `题目有更新，请刷新后再次作答！`. In practice that message also appears when
+  the answer array does not match the pool size (43 answers for 42 questions), so
+  check the count first; `choose` refuses a mismatch locally. If a correctly
+  sized payload is still refused, submit the redo from the page.
+- **`courses`/`homeworks` lists can be incomplete.** A course that exists but
+  is missing from the list appears after `--refresh` (a whole course was missed
+  that way); re-list before concluding a homework set is empty.
 - Requests are signed with
   `md5(base64("method=<METHOD>&ak=..&sk=..&time=<ms>"))` plus
   `Pc-Authorization: <_educoder_session>`. The script does this; hand-rolled
@@ -233,3 +267,5 @@ python educoder.py stats --json         # raw counters
 ## References
 
 - `references/api.md` — endpoints, headers and field traps this script relies on.
+- `references/quiz.md` — choice pools the API cannot serve: browser extraction,
+  page submission, wrong-answer detection, figures and tables.

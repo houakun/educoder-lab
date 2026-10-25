@@ -1,6 +1,6 @@
 {
   "name": "educoder-lab",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Agent skill: finish 头歌 (EduCoder) classroom labs end to end through the platform JSON API - no browser, no page snapshots.",
   "license": "MIT",
   "author": {
