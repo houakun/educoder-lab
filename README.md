@@ -61,6 +61,23 @@ export EDUCODER_PASSWORD='...'          # or answer the prompt
 python educoder-lab/scripts/educoder.py login --login <account>
 ```
 
+No password? Log in with WeChat — `qrlogin.py` prints a QR code in the terminal,
+you scan it with WeChat and confirm on the phone, and the session is cached the
+same way:
+
+```bash
+python educoder-lab/scripts/qrlogin.py
+```
+
+Or import a browser login state (e.g. after scanning in a normal browser):
+
+```bash
+python educoder.py import-session --session <_educoder_session cookie value>
+```
+
+See [references/qrlogin.md](educoder-lab/references/qrlogin.md) for the WeChat
+QR flow, endpoints, and status codes.
+
 Then:
 
 ```bash
@@ -90,6 +107,7 @@ python educoder.py evaluate --game <gid> --homework-id <hw> --wait
 | Command | Purpose |
 | --- | --- |
 | `login` | Authenticate and cache the session |
+| `import-session` | Import a browser login state from cookies (no password) |
 | `status` | Check the cached session |
 | `courses` | List your courses |
 | `homeworks --course <cid>` | List homeworks; `TODO` rows are unfinished |
@@ -167,7 +185,10 @@ deliberately does not do. Use the repository's traffic and stars for rough popul
 educoder-lab/
 ├── SKILL.md                  # skill instructions (Agent Skills format)
 ├── scripts/educoder.py       # the whole CLI, stdlib only
+├── scripts/qrlogin.py        # WeChat QR login (terminal QR code), stdlib only
 ├── references/api.md         # endpoints, headers, field traps
+├── references/quiz.md        # choice-challenge edge cases
+├── references/qrlogin.md     # WeChat QR login flow, endpoints, status codes
 ├── educoder-lab/             # copy that agents load
 ├── .claude-plugin/marketplace.json
 ├── package.json              # Pi package manifest (pi.skills)

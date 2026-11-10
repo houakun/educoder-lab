@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires Python 3.10+ and network access to data.educoder.net, plus an EduCoder account. No third-party packages and no browser.
 metadata:
   author: houakun
-  version: "1.2.0"
+  version: "1.3.0"
   repository: https://github.com/houakun/educoder-lab
   language: python
 ---
@@ -27,6 +27,8 @@ directory.
 
 ```bash
 python educoder.py login --login <account>      # prompts for password, caches session
+python qrlogin.py                               # no-password WeChat QR login (terminal QR code)
+python educoder.py import-session --session <cookie>   # import a browser login state
 python educoder.py status                       # confirm the cached session still works
 python educoder.py courses                      # find the course identifier
 python educoder.py homeworks --course <cid>     # TODO rows are unfinished; gid= is the entry challenge
@@ -269,3 +271,5 @@ python educoder.py stats --json         # raw counters
 - `references/api.md` — endpoints, headers and field traps this script relies on.
 - `references/quiz.md` — choice pools the API cannot serve: browser extraction,
   page submission, wrong-answer detection, figures and tables.
+- `references/qrlogin.md` — WeChat `qrconnect` flow, endpoints, and the verified
+  status-code table for `scripts/qrlogin.py`.

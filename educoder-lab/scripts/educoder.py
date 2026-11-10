@@ -6,6 +6,7 @@ no third-party dependencies. Credentials are cached locally after first login.
 
 Commands:
     login      authenticate and cache the session
+    import-session   import login state from browser cookies (no password)
     status     show cached session validity
     courses    list my courses
     homeworks  list homework tasks in a course
@@ -640,9 +641,62 @@ def cmd_login(args):
         import getpass
         password = getpass.getpass("password: ")
     data = api.login(args.login, password)
-    print(f"login ok: {data.get('name')} (user_id={data.get('user_id')}, "
-          f"school={data.get('school')})")
+    print("login ok")
     print(f"session cached -> {SESSION_FILE}")
+
+
+def cmd_import_session(args):
+    """Import a browser login state from cookies — no password needed.
+
+    After signing in on the website (e.g. via the WeChat QR code), the browser
+    holds two cookies: `_educoder_session` and `autologin_trustie`. Paste the
+    session value here and the script auto-detects the account (zzud) through
+    /users/get_user_info.json, then verifies the session by listing courses.
+    """
+    api = Api()
+    session = args.session or os.environ.get("EDUCODER_SESSION") or ""
+    autologin = args.autologin or os.environ.get("EDUCODER_AUTOLOGIN") or ""
+    zzud = args.zzud or os.environ.get("EDUCODER_ZZUD") or ""
+
+    if not session:
+        session = input("_educoder_session cookie 值: ").strip()
+    if not session:
+        raise ApiError("缺少 _educoder_session cookie，导入中止")
+
+    probe = Api()
+    probe.session = session
+    probe.autologin = autologin
+    info: dict = {}
+    login = ""
+    try:
+        info = probe.get("/users/get_user_info.json")
+        login = str(info.get("login") or "")
+    except ApiError:
+        pass
+
+    if not zzud:
+        zzud = login or input("无法自动获取账号(zzud)，请手动输入登录账号: ").strip()
+    if not zzud:
+        raise ApiError("缺少账号(zzud)，导入中止")
+
+    api.session = session
+    api.autologin = autologin
+    api.zzud = zzud
+    api.save()
+
+    try:
+        data = api.get(f"/courses.json?page=1&limit=1&order=mine&search=&zzud={zzud}")
+        visible = len(data.get("courses") or [])
+    except SessionExpired:
+        print("session 无效（已过期或签名不对），导入失败", file=sys.stderr)
+        return 1
+    except ApiError as exc:
+        print(f"session 校验失败：{exc}", file=sys.stderr)
+        return 1
+
+    print(f"session 导入成功，我的课程可见数: {visible}")
+    print(f"已写入 {SESSION_FILE}")
+    return 0
 
 
 def cmd_status(args):
@@ -658,8 +712,7 @@ def cmd_status(args):
     except ApiError as exc:
         print(f"session check failed: {exc}")
         return 1
-    print(f"session OK (zzud={api.zzud}), courses visible: "
-          f"{len(data.get('courses') or [])}")
+    print(f"session OK, courses visible: {len(data.get('courses') or [])}")
 
 
 def cmd_courses(args):
@@ -1438,6 +1491,13 @@ def build_parser():
     s.add_argument("--login", required=True)
     s.add_argument("--password")
     s.set_defaults(fn=cmd_login)
+
+    s = sub.add_parser("import-session",
+                       help="import login state from browser cookies (no password)")
+    s.add_argument("--session", help="_educoder_session cookie value")
+    s.add_argument("--autologin", help="autologin_trustie cookie value (optional)")
+    s.add_argument("--zzud", help="login account (auto-detected if omitted)")
+    s.set_defaults(fn=cmd_import_session)
 
     sub.add_parser("status", help="check cached session").set_defaults(fn=cmd_status)
     sub.add_parser("courses", parents=[common],

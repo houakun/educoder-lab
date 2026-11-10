@@ -4,6 +4,23 @@ All notable changes to this skill are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-11-10
+
+### Added
+
+- `scripts/qrlogin.py` — no-password WeChat QR login. Renders a QR code in the
+  terminal with a self-contained, stdlib-only QR encoder, polls WeChat's
+  `qrconnect` until the phone confirms, exchanges the authorization code for an
+  `_educoder_session`, and writes the same `~/.educoder/session.json` that
+  `educoder.py` reuses.
+- `import-session --session <cookie>` — imports a browser login state from the
+  `_educoder_session` cookie, auto-detects the account via
+  `/users/get_user_info.json`, and verifies the session.
+- `references/qrlogin.md` — the WeChat `qrconnect` flow, endpoints, and the
+  verified status-code table (408/404/403/405/402/500).
+- Login / status output no longer prints the account name, real name, user id, or
+  school.
+
 ## [1.2.0] — 2026-10-25
 
 Driven by a real 165-question run (two networking pools) that exposed the gaps
